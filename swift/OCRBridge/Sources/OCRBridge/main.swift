@@ -49,14 +49,22 @@ queue.qualityOfService = .userInitiated
 let encoder = JSONEncoder()
 encoder.outputFormatting = []
 
-func performOCR(path: String, pageIndex: Int, width: Int, height: Int, dpi: Int, langs: [String]) {
+func performOCR(path: String, pageIndex: Int, width: Int, height: Int, dpi: Int, langs: [String], recognitionLevel: String?, usesCPUOnly: Bool?, autoDetectLanguage: Bool?) {
     queue.addOperation {
         do {
             let cg = try loadCGImage(from: path)
             let req = VNRecognizeTextRequest()
-            req.recognitionLevel = .accurate
+            
+            // 设置识别级别
+            if let level = recognitionLevel, level == "fast" {
+                req.recognitionLevel = .fast
+            } else {
+                req.recognitionLevel = .accurate  // 默认值
+            }
+            
             req.usesLanguageCorrection = true
             req.minimumTextHeight = 0.02 // 约束过小文字
+            
             // 设置支持的语言，确保中文识别
             if !langs.isEmpty { 
                 req.recognitionLanguages = langs 
@@ -68,18 +76,28 @@ func performOCR(path: String, pageIndex: Int, width: Int, height: Int, dpi: Int,
             if #available(macOS 13.0, *) {
                 req.revision = VNRecognizeTextRequestRevision3
                 // 自动语言检测（可与指定语言同时使用，提升混合文本识别）
-                req.automaticallyDetectsLanguage = true  // 自动检测语言
+                if let autoDetect = autoDetectLanguage {
+                    req.automaticallyDetectsLanguage = autoDetect
+                } else {
+                    req.automaticallyDetectsLanguage = true  // 默认启用自动检测
+                }
             }
+            
             // 启用 Neural Engine/GPU 加速
             let options: [VNImageOption: Any] = [
                 .properties: [:]
             ]
             let handler = VNImageRequestHandler(cgImage: cg, options: options)
             
-            // 设置处理优先级为高性能（利用 Neural Engine）
+            // 设置CPU/GPU使用
             if #available(macOS 12.0, *) {
-                req.usesCPUOnly = false  // 明确启用 Neural Engine/GPU
+                if let cpuOnly = usesCPUOnly {
+                    req.usesCPUOnly = cpuOnly
+                } else {
+                    req.usesCPUOnly = false  // 默认启用 Neural Engine/GPU
+                }
             }
+            
             try handler.perform([req])
             let observations = (req.results as? [VNRecognizedTextObservation]) ?? []
             var items: [OCRItemOut] = []
@@ -95,15 +113,27 @@ func performOCR(path: String, pageIndex: Int, width: Int, height: Int, dpi: Int,
                 items.append(item)
             }
             let out = OCRResponse(type: "result", page_index: pageIndex, width: width, height: height, items: items, message: nil)
-            if let data = try? encoder.encode(out), let s = String(data: data, encoding: .utf8) {
-                FileHandle.standardOutput.write(s.data(using: .utf8)!)
-                FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+            if let data = try? encoder.encode(out) {
+                if let s = String(data: data, encoding: .utf8) {
+                    if let outputData = s.data(using: .utf8) {
+                        FileHandle.standardOutput.write(outputData)
+                        if let newlineData = "\n".data(using: .utf8) {
+                            FileHandle.standardOutput.write(newlineData)
+                        }
+                    }
+                }
             }
         } catch {
             let out = OCRResponse(type: "error", page_index: pageIndex, width: width, height: height, items: nil, message: error.localizedDescription)
-            if let data = try? encoder.encode(out), let s = String(data: data, encoding: .utf8) {
-                FileHandle.standardOutput.write(s.data(using: .utf8)!)
-                FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+            if let data = try? encoder.encode(out) {
+                if let s = String(data: data, encoding: .utf8) {
+                    if let outputData = s.data(using: .utf8) {
+                        FileHandle.standardOutput.write(outputData)
+                        if let newlineData = "\n".data(using: .utf8) {
+                            FileHandle.standardOutput.write(newlineData)
+                        }
+                    }
+                }
             }
         }
     }
@@ -115,9 +145,15 @@ while let line = readLine() {
     let decoder = JSONDecoder()
     guard let req = try? decoder.decode(OCRRequest.self, from: data) else {
         let out = OCRResponse(type: "error", page_index: nil, width: nil, height: nil, items: nil, message: "无法解析请求")
-        if let d = try? encoder.encode(out), let s = String(data: d, encoding: .utf8) {
-            FileHandle.standardOutput.write(s.data(using: .utf8)!)
-            FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+        if let d = try? encoder.encode(out) {
+            if let s = String(data: d, encoding: .utf8) {
+                if let outputData = s.data(using: .utf8) {
+                    FileHandle.standardOutput.write(outputData)
+                    if let newlineData = "\n".data(using: .utf8) {
+                        FileHandle.standardOutput.write(newlineData)
+                    }
+                }
+            }
         }
         continue
     }
@@ -125,15 +161,21 @@ while let line = readLine() {
     if req.cmd == "ocr" {
         guard let p = req.image_path, let idx = req.page_index, let w = req.width, let h = req.height else {
             let out = OCRResponse(type: "error", page_index: req.page_index, width: req.width, height: req.height, items: nil, message: "缺少必要字段")
-            if let d = try? encoder.encode(out), let s = String(data: d, encoding: .utf8) {
-                FileHandle.standardOutput.write(s.data(using: .utf8)!)
-                FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+            if let d = try? encoder.encode(out) {
+                if let s = String(data: d, encoding: .utf8) {
+                    if let outputData = s.data(using: .utf8) {
+                        FileHandle.standardOutput.write(outputData)
+                        if let newlineData = "\n".data(using: .utf8) {
+                            FileHandle.standardOutput.write(newlineData)
+                        }
+                    }
+                }
             }
             continue
         }
         let dpi = req.dpi ?? 300
         let langs = req.languages ?? ["zh-Hans", "zh-Hant", "en-US"]
-        performOCR(path: p, pageIndex: idx, width: w, height: h, dpi: dpi, langs: langs)
+        performOCR(path: p, pageIndex: idx, width: w, height: h, dpi: dpi, langs: langs, recognitionLevel: req.recognition_level, usesCPUOnly: req.uses_cpu_only, autoDetectLanguage: req.auto_detect_language)
     }
 }
 

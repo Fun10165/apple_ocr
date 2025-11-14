@@ -120,62 +120,37 @@ class TestCLI:
 
     @patch('apple_ocr.cli.get_pdf_page_count')
     @patch('apple_ocr.cli.parse_pages')
-    @patch('apple_ocr.cli.render_pdf_stream')
-    @patch('apple_ocr.cli.SwiftOCRClient')
-    @patch('apple_ocr.cli.OverlayComposer')
-    def test_process_one_with_pages(self, mock_composer_class, mock_client_class, 
-                                   mock_render, mock_parse, mock_count):
-        """测试带页面选择的处理"""
+    @patch('apple_ocr.cli.format_pages')
+    @patch('apple_ocr.cli.ocrmypdf')
+    def test_process_one_with_pages(self, mock_ocr, mock_format, mock_parse, mock_count):
+        """测试带页面选择（ocrmypdf 引擎）"""
         from apple_ocr.cli import process_one
-        
-        # 设置mock
+
         mock_count.return_value = 10
-        mock_parse.return_value = [0, 2, 4]  # 选择第1,3,5页
-        
-        mock_client = Mock()
-        mock_client_class.return_value = mock_client
-        
-        mock_composer = Mock()
-        mock_composer_class.return_value = mock_composer
-        
-        # 模拟渲染结果
-        mock_page = Mock()
-        mock_page.image_path = "test.png"
-        mock_page.page_index = 0
-        mock_page.width = 1000
-        mock_page.height = 1000
-        mock_page.dpi = 300
-        mock_render.return_value = [mock_page]
-        
-        # 模拟OCR结果
-        mock_result = Mock()
-        mock_result.page_index = 0
-        mock_result.width = 1000
-        mock_result.height = 1000
-        mock_result.items = []
-        mock_client.collect_results.return_value = [mock_result]
-        
+        mock_parse.return_value = [0, 2, 4]  # 选择第1,3,5页（0-based）
+        mock_format.return_value = "1,3,5"   # 转为1-based字符串
+
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "test.pdf"
             output_path = Path(temp_dir) / "output.pdf"
-            
+            pdf_path.touch()
+
             args = Mock()
             args.pages = "1,3,5"
-            args.dpi = 300
-            args.workers = 4
-            args.swift_bin = "test_bin"
-            
+            args.engine = "ocrmypdf"
+            args.no_progress = False
+
             process_one(pdf_path, output_path, args)
-            
-            # 验证调用
+
             mock_count.assert_called_once_with(pdf_path)
             mock_parse.assert_called_once_with("1,3,5", 10)
-            mock_render.assert_called_once()
-            
-            # 验证render_pdf_stream被调用时包含selected_pages参数
-            call_args = mock_render.call_args
-            assert 'selected_pages' in call_args.kwargs
-            assert call_args.kwargs['selected_pages'] == [0, 2, 4]
+            mock_format.assert_called_once()
+
+            assert mock_ocr.ocr.called
+            call_args = mock_ocr.ocr.call_args
+            assert call_args.kwargs.get('input_file') == str(pdf_path)
+            assert call_args.kwargs.get('output_file') == str(output_path)
+            assert call_args.kwargs.get('pages') == "1,3,5"
 
     @patch('apple_ocr.cli.sys.exit')
     @patch('apple_ocr.cli.get_pdf_page_count')
@@ -196,6 +171,7 @@ class TestCLI:
             args.dpi = 300
             args.workers = 4
             args.swift_bin = "test_bin"
+            args.engine = "ocrmypdf"
             
             process_one(pdf_path, output_path, args)
             

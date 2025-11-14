@@ -81,6 +81,8 @@ DerivedData/
 # PDF渲染产生的图片目录
 .test_*_images/
 .*_images/
+tmp_images/
+.trae/
 
 # 测试和演示文件
 test_*.pdf
@@ -145,3 +147,5 @@ site/
 .dmypy.json
 dmypy.json
 .ruff_cache/
+*.pdf
+!examples/*.pdf
