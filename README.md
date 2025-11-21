@@ -122,3 +122,17 @@ make clean
 
 ## 许可证
 MIT，详见 `LICENSE`。
+
+## 示例与效果
+- PDF → 可搜索 PDF（页码示例：1-3）：
+  - `uv run apple-ocr --input '/path/to/[HIT教材]概率论与数理统计第三版.pdf' --output HIT_stats_ocr.pdf --lang eng+chi_sim --pages '1-3'`
+- 图片目录 → JSON（中文/英文混排）：
+  - `uv run apple-ocr --input /path/to/images --output result.json --images --swift-bin swift/OCRBridge/.build/release/ocrbridge --swift-languages zh-Hans,en-US`
+
+## 常见问题（FAQ）
+- 生成的 PDF 是否可搜索？
+  - 是，使用 ocrmypdf 生成“sandwich”PDF，文本层不可见但可复制/搜索。
+- 为什么 Swift 语言与 ocrmypdf 不同？
+  - ocrmypdf 用 Tesseract 代码（`eng/chi_sim/chi_tra`）；Swift 用地区代码（`en-US/zh-Hans/zh-Hant`）。
+- 看到 HOCR/XML 错误怎么处理？
+  - 先分页处理（`--pages`），或改用 `--engine swift`。

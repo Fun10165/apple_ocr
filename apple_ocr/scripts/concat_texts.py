@@ -1,5 +1,5 @@
-import json
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -8,8 +8,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="从 result.json 按图片拼接文本，生成 {image, text} 列表"
     )
-    parser.add_argument("--input", default="result.json", help="输入 JSON 文件，默认 result.json")
-    parser.add_argument("--output", default="image_texts.json", help="输出 JSON 文件，默认 image_texts.json")
+    parser.add_argument(
+        "--input", default="result.json", help="输入 JSON 文件，默认 result.json"
+    )
+    parser.add_argument(
+        "--output",
+        default="image_texts.json",
+        help="输出 JSON 文件，默认 image_texts.json",
+    )
     parser.add_argument(
         "--sep",
         default="\n",

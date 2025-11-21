@@ -3,20 +3,21 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from tqdm import tqdm
 
-from .pdf_to_images import render_pdf_stream, get_pdf_page_count
+from .api import AppleOCR
 from .ocr_client import SwiftOCRClient
 from .overlay_builder import OverlayComposer
-from .page_parser import parse_pages, format_pages
-from .api import AppleOCR
+from .page_parser import format_pages, parse_pages
+from .pdf_to_images import get_pdf_page_count, render_pdf_stream
 
+ocrmypdf = None
 try:
-    import ocrmypdf  # type: ignore
+    ocrmypdf = __import__("ocrmypdf")
 except Exception:
-    ocrmypdf = None  # 在图片模式或未安装时不阻塞
+    ocrmypdf = None
 
 logger = logging.getLogger("apple_ocr")
 
@@ -35,16 +36,29 @@ def main():
         description="Apple Vision OCR pipeline: PDF->PNG->OCR->Overlay PDF"
     )
     parser.add_argument("--input", required=True, help="输入PDF或目录")
-    parser.add_argument("--output", required=True, help="输出PDF文件或目录；图片模式下为JSON文件")
-    parser.add_argument("--dpi", type=int, default=None, help="渲染DPI，None或0表示图像直出模式（默认），>0表示渲染模式")
+    parser.add_argument(
+        "--output", required=True, help="输出PDF文件或目录；图片模式下为JSON文件"
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=None,
+        help="渲染DPI，None或0表示图像直出模式（默认），>0表示渲染模式",
+    )
     parser.add_argument(
         "--workers", type=int, default=os.cpu_count() or 4, help="并行渲染/处理线程数"
     )
     parser.add_argument(
         "--swift-bin",
         type=str,
-        default=str(Path(__file__).parent.parent / "swift" / "OCRBridge" / 
-                    ".build" / "release" / "ocrbridge"),
+        default=str(
+            Path(__file__).parent.parent
+            / "swift"
+            / "OCRBridge"
+            / ".build"
+            / "release"
+            / "ocrbridge"
+        ),
         help="Swift OCR 可执行文件路径",
     )
     parser.add_argument("--verbose", action="store_true", help="启用详细日志")
@@ -52,12 +66,12 @@ def main():
     parser.add_argument(
         "--pages",
         type=str,
-        help="指定要处理的页面范围，如：1,3,5-10,15 （1-based页码）"
+        help="指定要处理的页面范围，如：1,3,5-10,15 （1-based页码）",
     )
     parser.add_argument(
         "--skip-pages",
         type=str,
-        help="指定要跳过的页面范围，如：24,50-60 （1-based页码），会从--pages中排除"
+        help="指定要跳过的页面范围，如：24,50-60 （1-based页码），会从--pages中排除",
     )
     parser.add_argument(
         "--recognition-level",
@@ -79,7 +93,7 @@ def main():
         "--swift-languages",
         type=str,
         default=None,
-        help="Swift Vision 语言列表（逗号分隔，如 zh-Hans,en-US）"
+        help="Swift Vision 语言列表（逗号分隔，如 zh-Hans,en-US）",
     )
     parser.add_argument(
         "--engine",
@@ -153,33 +167,35 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
     pages_str: Optional[str] = None
     _pages_arg = getattr(args, "pages", None)
     _skip_pages_arg = getattr(args, "skip_pages", None)
-    
+
     if _pages_arg or _skip_pages_arg:
         try:
             total_pages = get_pdf_page_count(pdf_path)
-            
+
             # 确定要处理的页面
             if _pages_arg:
                 selected_pages = set(parse_pages(_pages_arg, total_pages))
             else:
                 # 如果没有指定pages，默认处理所有页面
                 selected_pages = set(range(total_pages))
-            
+
             # 排除要跳过的页面
             if isinstance(_skip_pages_arg, str) and _skip_pages_arg.strip():
                 skip_pages = set(parse_pages(_skip_pages_arg, total_pages))
                 selected_pages = selected_pages - skip_pages
                 if skip_pages:
-                    logger.info(f"跳过页面: {format_pages(sorted(skip_pages))} (共{len(skip_pages)}页)")
-            
+                    logger.info(
+                        f"跳过页面: {format_pages(sorted(skip_pages))} (共{len(skip_pages)}页)"
+                    )
+
             if not selected_pages:
                 logger.error("没有页面需要处理（所有页面都被跳过）")
                 sys.exit(1)
                 return
-            
-            selected_pages = sorted(list(selected_pages))
-            pages_str = format_pages(selected_pages)
-            logger.info(f"选择页面: {pages_str} (共{len(selected_pages)}页)")
+
+            selected_pages_list = sorted(list(selected_pages))
+            pages_str = format_pages(selected_pages_list)
+            logger.info(f"选择页面: {pages_str} (共{len(selected_pages_list)}页)")
         except ValueError as e:
             logger.error(f"页面范围解析错误: {e}")
             sys.exit(1)
@@ -189,7 +205,9 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
 
     if engine == "ocrmypdf":
         if ocrmypdf is None:
-            logger.error("ocrmypdf 未安装或导入失败。请确保依赖已安装：uv sync 或 uv add ocrmypdf")
+            logger.error(
+                "ocrmypdf 未安装或导入失败。请确保依赖已安装：uv sync 或 uv add ocrmypdf"
+            )
             sys.exit(1)
             return
         plugins_arg = getattr(args, "plugins", None)
@@ -219,12 +237,14 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
             # 捕获更详细的错误信息
             error_msg = str(e)
             error_type = type(e).__name__
-            
+
             logger.error(f"ocrmypdf 处理失败 ({error_type}): {error_msg}")
-            
+
             # 对于 XML 解析错误，提供更详细的诊断信息
             if "not well-formed" in error_msg or "invalid token" in error_msg:
-                logger.error("HOCR XML 解析错误：ocrmypdf-appleocr 生成的 HOCR 文件包含无效字符")
+                logger.error(
+                    "HOCR XML 解析错误：ocrmypdf-appleocr 生成的 HOCR 文件包含无效字符"
+                )
                 logger.error("这可能是因为：")
                 logger.error("1. OCR 识别的文本包含特殊字符，未正确转义到 XML")
                 logger.error("2. 某个页面的内容导致 HOCR 格式异常")
@@ -232,20 +252,20 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
                 logger.error("  方案1: 使用 swift 引擎（如果可用）:")
                 logger.error("    --engine swift")
                 logger.error("  方案2: 分页处理，跳过问题页面:")
-                logger.error("    --pages \"1-20\"  # 先处理前面的页面")
+                logger.error('    --pages "1-20"  # 先处理前面的页面')
                 logger.error("  方案3: 使用 --skip-text 跳过已有文本页面")
                 logger.error("  方案4: 检查 ocrmypdf-appleocr 插件版本，可能需要更新")
-            
+
             # 如果是 ocrmypdf 特定的异常，尝试获取更多信息
-            if hasattr(e, '__cause__') and e.__cause__:
+            if hasattr(e, "__cause__") and e.__cause__:
                 logger.error(f"底层错误: {e.__cause__}")
-            if hasattr(e, '__context__') and e.__context__:
+            if hasattr(e, "__context__") and e.__context__:
                 logger.error(f"上下文错误: {e.__context__}")
-            
+
             # 记录完整异常堆栈（仅在verbose模式下）
             if getattr(args, "verbose", False):
                 logger.exception("完整异常堆栈:")
-            
+
             sys.exit(1)
             return
         return
@@ -261,7 +281,7 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
             "chi_tra": "zh-Hant",
         }
         langs = []
-        for part in str(lang).split('+'):
+        for part in str(lang).split("+"):
             part = part.strip()
             if not part:
                 continue
@@ -269,10 +289,19 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
         return langs or None
 
     swift_langs: Optional[List[str]] = None
-    if isinstance(getattr(args, "swift_languages", None), str) and str(getattr(args, "swift_languages")).strip():
-        swift_langs = [s.strip() for s in str(args.swift_languages).split(',') if s.strip()]
+    if (
+        isinstance(getattr(args, "swift_languages", None), str)
+        and str(getattr(args, "swift_languages")).strip()
+    ):
+        swift_langs = [
+            s.strip() for s in str(args.swift_languages).split(",") if s.strip()
+        ]
     else:
-        swift_langs = _map_lang_to_swift(getattr(args, "lang", None) if isinstance(getattr(args, "lang", None), str) else None)
+        swift_langs = _map_lang_to_swift(
+            getattr(args, "lang", None)
+            if isinstance(getattr(args, "lang", None), str)
+            else None
+        )
 
     ocr_client = SwiftOCRClient(
         swift_bin=args.swift_bin,
@@ -289,13 +318,24 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
         rendered_pages = []
 
         if swift_langs:
-            logger.info(f"Swift 语言: {','.join(swift_langs)} 识别级别: {getattr(args, 'recognition_level', 'accurate')} CPU仅用: {getattr(args, 'uses_cpu_only', False)} 自动检测: {getattr(args, 'auto_detect_language', True)}")
+            logger.info(
+                f"Swift 语言: {','.join(swift_langs)} 识别级别: {getattr(args, 'recognition_level', 'accurate')} CPU仅用: {getattr(args, 'uses_cpu_only', False)} 自动检测: {getattr(args, 'auto_detect_language', True)}"
+            )
         logger.info("开始渲染页面（swift 引擎）...")
         for page in tqdm(
-            render_pdf_stream(pdf_path, dpi=args.dpi, workers=args.workers, selected_pages=parse_pages(_pages_arg, get_pdf_page_count(pdf_path)) if _pages_arg else None),
+            render_pdf_stream(
+                pdf_path,
+                dpi=args.dpi,
+                workers=args.workers,
+                selected_pages=(
+                    parse_pages(_pages_arg, get_pdf_page_count(pdf_path))
+                    if _pages_arg
+                    else None
+                ),
+            ),
             desc="渲染页面",
             unit="页",
-            disable=getattr(args, "no_progress", False)
+            disable=getattr(args, "no_progress", False),
         ):
             rendered_pages.append(page)
             ocr_client.send_image(
@@ -317,7 +357,7 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
             desc="OCR处理",
             total=expected_pages,
             unit="页",
-            disable=getattr(args, "no_progress", False)
+            disable=getattr(args, "no_progress", False),
         ):
             composer.add_page_overlay(
                 pdf_path=pdf_path,
@@ -334,12 +374,15 @@ def process_one(pdf_path: Path, output_pdf: Path, args):
         ocr_client.stop()
 
 
- 
-
-
 def _collect_image_paths(input_path: Path, exts: List[str]) -> List[Path]:
     if input_path.is_dir():
-        return sorted([p for p in input_path.iterdir() if p.is_file() and p.suffix.lower().lstrip('.') in exts])
+        return sorted(
+            [
+                p
+                for p in input_path.iterdir()
+                if p.is_file() and p.suffix.lower().lstrip(".") in exts
+            ]
+        )
     else:
         return [input_path]
 
@@ -354,7 +397,7 @@ def process_images(input_path: Path, output_json: Path, args):
     image_exts = getattr(args, "image_exts", "png,jpg,jpeg,tiff,bmp")
     if not isinstance(image_exts, str):
         image_exts = "png,jpg,jpeg,tiff,bmp"
-    allow_exts = [e.strip().lower() for e in (image_exts or "").split(',') if e.strip()]
+    allow_exts = [e.strip().lower() for e in (image_exts or "").split(",") if e.strip()]
     if not allow_exts:
         allow_exts = ["png", "jpg", "jpeg", "tiff", "bmp"]
 
@@ -376,7 +419,7 @@ def process_images(input_path: Path, output_json: Path, args):
             "chi_tra": "zh-Hant",
         }
         langs = []
-        for part in str(lang).split('+'):
+        for part in str(lang).split("+"):
             part = part.strip()
             if not part:
                 continue
@@ -384,13 +427,22 @@ def process_images(input_path: Path, output_json: Path, args):
         return langs or None
 
     swift_langs: Optional[List[str]] = None
-    if isinstance(getattr(args, "swift_languages", None), str) and str(getattr(args, "swift_languages")).strip():
-        swift_langs = [s.strip() for s in str(args.swift_languages).split(',') if s.strip()]
+    if (
+        isinstance(getattr(args, "swift_languages", None), str)
+        and str(getattr(args, "swift_languages")).strip()
+    ):
+        swift_langs = [
+            s.strip() for s in str(args.swift_languages).split(",") if s.strip()
+        ]
     else:
-        swift_langs = _map_lang_to_swift(getattr(args, "lang", None) if isinstance(getattr(args, "lang", None), str) else None)
+        swift_langs = _map_lang_to_swift(
+            getattr(args, "lang", None)
+            if isinstance(getattr(args, "lang", None), str)
+            else None
+        )
 
     try:
-        use_direct_swift = 'MagicMock' in type(SwiftOCRClient).__name__
+        use_direct_swift = "MagicMock" in type(SwiftOCRClient).__name__
         if use_direct_swift:
             client = SwiftOCRClient(
                 swift_bin=getattr(args, "swift_bin", ""),
@@ -402,6 +454,7 @@ def process_images(input_path: Path, output_json: Path, args):
             # 发送任务（按文件顺序）
             for idx, img in enumerate(images):
                 from PIL import Image
+
                 with Image.open(img) as im:
                     w, h = im.size
                 client.send_image(
@@ -413,21 +466,24 @@ def process_images(input_path: Path, output_json: Path, args):
                 )
             results = []
             for res in client.collect_results(expected_pages=len(images)):
-                results.append({
-                    "image": Path(images[res.page_index]).name,
-                    "width": res.width,
-                    "height": res.height,
-                    "items": [
-                        {
-                            "text": i.text,
-                            "x": i.x,
-                            "y": i.y,
-                            "w": i.w,
-                            "h": i.h,
-                            "confidence": i.confidence,
-                        } for i in res.items
-                    ],
-                })
+                results.append(
+                    {
+                        "image": Path(images[res.page_index]).name,
+                        "width": res.width,
+                        "height": res.height,
+                        "items": [
+                            {
+                                "text": i.text,
+                                "x": i.x,
+                                "y": i.y,
+                                "w": i.w,
+                                "h": i.h,
+                                "confidence": i.confidence,
+                            }
+                            for i in res.items
+                        ],
+                    }
+                )
         else:
             ocr = AppleOCR(
                 swift_bin=getattr(args, "swift_bin", ""),
@@ -436,9 +492,11 @@ def process_images(input_path: Path, output_json: Path, args):
                 uses_cpu_only=getattr(args, "uses_cpu_only", False),
                 auto_detect_language=getattr(args, "auto_detect_language", True),
             )
-            results = ocr.extract_text_from_images(images)
+            from typing import cast
+            results = ocr.extract_text_from_images(cast(List[Path | str], images))
 
         import json
+
         output_json.parent.mkdir(parents=True, exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)

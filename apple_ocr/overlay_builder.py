@@ -2,13 +2,13 @@ import io
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from pypdf import PdfReader, PdfWriter, Transformation
-from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import portrait
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
 
 logger = logging.getLogger("apple_ocr")
 
@@ -30,31 +30,39 @@ class OverlayComposer:
         self.total_pages: int = 0
         self.overlays: Dict[int, bytes] = {}
         self.chinese_font = self._setup_chinese_font()
-    
+
     def _setup_chinese_font(self) -> str:
         """设置支持中文的字体"""
         try:
             # 尝试多个macOS中文字体路径
             font_paths = [
-                '/System/Library/Fonts/PingFang.ttc',
-                '/System/Library/Fonts/Hiragino Sans GB.ttc', 
-                '/System/Library/Fonts/STHeiti Light.ttc',
-                '/Library/Fonts/Arial Unicode MS.ttf'
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+                "/Library/Fonts/Arial Unicode MS.ttf",
             ]
             for font_path in font_paths:
                 try:
-                    pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+                    pdfmetrics.registerFont(TTFont("ChineseFont", font_path))
                     logger.debug(f"使用中文字体: {font_path}")
-                    return 'ChineseFont'
+                    return "ChineseFont"
                 except Exception:
                     continue
         except Exception:
             pass
         logger.warning("无法加载中文字体，使用Helvetica（可能无法显示中文）")
-        return 'Helvetica'
+        return "Helvetica"
 
     @staticmethod
-    def _norm_to_points(x: float, y: float, w: float, h: float, width_px: int, height_px: int, dpi: Optional[int]):
+    def _norm_to_points(
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        width_px: int,
+        height_px: int,
+        dpi: Optional[int],
+    ):
         # Vision坐标为归一化且原点在左下；PDF单位为points（72/inch）
         x_px = x * width_px
         y_px = y * height_px
@@ -69,7 +77,15 @@ class OverlayComposer:
 
         return x_px * scale, y_px * scale, w_px * scale, h_px * scale
 
-    def _build_overlay_page(self, page_width_pt: float, page_height_pt: float, items: List[BBoxItem], width_px: int, height_px: int, dpi: Optional[int]) -> bytes:
+    def _build_overlay_page(
+        self,
+        page_width_pt: float,
+        page_height_pt: float,
+        items: List[BBoxItem],
+        width_px: int,
+        height_px: int,
+        dpi: Optional[int],
+    ) -> bytes:
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=portrait((page_width_pt, page_height_pt)))
         try:
@@ -97,10 +113,14 @@ class OverlayComposer:
 
             # 计算文本原始宽度，并按bbox宽度进行水平拉伸，使长度精确贴合
             try:
-                measured_w = pdfmetrics.stringWidth(item.text or "", self.chinese_font, font_size)
+                measured_w = pdfmetrics.stringWidth(
+                    item.text or "", self.chinese_font, font_size
+                )
             except Exception:
                 # 回退到Helvetica测量
-                measured_w = pdfmetrics.stringWidth(item.text or "", "Helvetica", font_size)
+                measured_w = pdfmetrics.stringWidth(
+                    item.text or "", "Helvetica", font_size
+                )
 
             scale_x = 1.0
             if measured_w and measured_w > 0:
@@ -133,7 +153,15 @@ class OverlayComposer:
         c.save()
         return buf.getvalue()
 
-    def add_page_overlay(self, pdf_path: Path, page_index: int, dpi: int, width_px: int, height_px: int, items: List):
+    def add_page_overlay(
+        self,
+        pdf_path: Path,
+        page_index: int,
+        dpi: int,
+        width_px: int,
+        height_px: int,
+        items: List,
+    ):
         if self.reader is None:
             self.reader = PdfReader(str(pdf_path))
             self.total_pages = len(self.reader.pages)
@@ -175,16 +203,18 @@ class OverlayComposer:
                     else:  # 270
                         trans = Transformation().rotate(-270).translate(w, 0)
                     # 兼容不同版本的PyPDF2：优先使用新API，否则回退旧API方案
-                    try:
+                    if hasattr(page, "merge_transformed_page"):
                         page.merge_transformed_page(overlay_page, trans)
-                    except AttributeError:
-                        try:
-                            # 新推荐方式：在overlay_page上添加变换，再merge_page
+                    else:
+                        if hasattr(overlay_page, "add_transformation"):
                             overlay_page.add_transformation(trans)
                             page.merge_page(overlay_page)
-                        except Exception:
-                            # 最后回退到旧API
-                            page.mergeTransformedPage(overlay_page, trans)
+                        else:
+                            method = getattr(page, "mergeTransformedPage", None)
+                            if callable(method):
+                                method(overlay_page, trans)
+                            else:
+                                page.merge_page(overlay_page)
                 else:
                     page.merge_page(overlay_page)
             self.writer.add_page(page)

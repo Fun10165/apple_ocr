@@ -1,14 +1,15 @@
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List
+from typing import List, Optional, Any, cast
 
 from pdf2image import convert_from_path, pdfinfo_from_path
+
 try:
-    import fitz  # PyMuPDF
-except ImportError:
+    fitz = cast(Any, __import__("fitz"))
+except Exception:
     fitz = None
 
 logger = logging.getLogger("apple_ocr")
@@ -20,7 +21,9 @@ def get_pdf_page_count(pdf_path: Path) -> int:
     return int(info.get("Pages", 0))
 
 
-def _extract_embedded_images(pdf_path: Path, page_index: int, out_dir: Path) -> Optional["PageImage"]:
+def _extract_embedded_images(
+    pdf_path: Path, page_index: int, out_dir: Path
+) -> Optional["PageImage"]:
     """
     提取PDF页面中的嵌入图像（图像直出模式）
 
@@ -73,13 +76,17 @@ def _extract_embedded_images(pdf_path: Path, page_index: int, out_dir: Path) -> 
             f.write(image_bytes)
 
         # 获取图像尺寸
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         img = Image.open(io.BytesIO(image_bytes))
         width, height = img.size
         img.close()  # 确保图像文件句柄关闭
 
-        logger.debug(f"图像直出: 页 {page_index} -> {image_path.name} ({width}x{height})")
+        logger.debug(
+            f"图像直出: 页 {page_index} -> {image_path.name} ({width}x{height})"
+        )
 
         result = PageImage(
             page_index=page_index,
@@ -114,12 +121,14 @@ class PageImage:
     total_pages: int
 
 
-def _render_one_page(pdf_path: Path, page_index: int, dpi: int, out_dir: Path) -> PageImage:
+def _render_one_page(
+    pdf_path: Path, page_index: int, dpi: int, out_dir: Path
+) -> PageImage:
     out_dir.mkdir(parents=True, exist_ok=True)
     base = f"page_{page_index:06d}"
 
     # 仅渲染指定页，实现流式并行
-    paths = convert_from_path(
+    paths = cast(List[str], convert_from_path(
         str(pdf_path),
         dpi=dpi,
         fmt="png",
@@ -130,12 +139,13 @@ def _render_one_page(pdf_path: Path, page_index: int, dpi: int, out_dir: Path) -
         first_page=page_index + 1,
         last_page=page_index + 1,
         single_file=True,
-    )
+    ))
     image_path = paths[0]
 
     # 读取图片尺寸
     try:
         from PIL import Image
+
         with Image.open(image_path) as im:
             width, height = im.size
     except Exception:
@@ -151,7 +161,12 @@ def _render_one_page(pdf_path: Path, page_index: int, dpi: int, out_dir: Path) -
     )
 
 
-def render_pdf_stream(pdf_path: Path, dpi: Optional[int] = None, workers: int = os.cpu_count() or 4, selected_pages: Optional[List[int]] = None):
+def render_pdf_stream(
+    pdf_path: Path,
+    dpi: Optional[int] = None,
+    workers: int = os.cpu_count() or 4,
+    selected_pages: Optional[List[int]] = None,
+):
     """将PDF并行渲染为PNG，支持图像直出模式。
 
     - 当dpi为None或0时，使用图像直出模式（直接提取PDF中的嵌入图像）
@@ -187,19 +202,24 @@ def render_pdf_stream(pdf_path: Path, dpi: Optional[int] = None, workers: int = 
         futures = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for page_index in pages_to_render:
-                futures.append(ex.submit(_extract_embedded_images, pdf_path, page_index, out_dir))
+                futures.append(
+                    ex.submit(_extract_embedded_images, pdf_path, page_index, out_dir)
+                )
 
             for fut in as_completed(futures):
-                page_img: Optional[PageImage] = fut.result()
-                if page_img is not None:
-                    page_img.total_pages = total_pages
+                page_img_opt: Optional[PageImage] = fut.result()
+                if page_img_opt is not None:
+                    page_img_val = page_img_opt
+                    page_img_val.total_pages = total_pages
                     logger.debug(
-                        f"图像直出完成: page={page_img.page_index} size={page_img.width}x{page_img.height}"
+                        f"图像直出完成: page={page_img_val.page_index} size={page_img_val.width}x{page_img_val.height}"
                     )
-                    yield page_img
+                    yield page_img_val
                 else:
                     # 如果图像直出失败，回退到默认渲染
-                    logger.debug(f"页面 {futures.index(fut)} 无嵌入图像，回退到渲染模式")
+                    logger.debug(
+                        f"页面 {futures.index(fut)} 无嵌入图像，回退到渲染模式"
+                    )
                     # 这里可以添加回退逻辑，但为了简化，我们暂时跳过
                     continue
     else:
@@ -210,12 +230,14 @@ def render_pdf_stream(pdf_path: Path, dpi: Optional[int] = None, workers: int = 
         futures = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for page_index in pages_to_render:
-                futures.append(ex.submit(_render_one_page, pdf_path, page_index, dpi, out_dir))
+                futures.append(
+                    ex.submit(_render_one_page, pdf_path, page_index, dpi, out_dir)
+                )
 
             for fut in as_completed(futures):
-                page_img: PageImage = fut.result()
-                page_img.total_pages = total_pages
+                page_img_res: PageImage = cast(PageImage, fut.result())
+                page_img_res.total_pages = total_pages
                 logger.debug(
-                    f"渲染完成: page={page_img.page_index} size={page_img.width}x{page_img.height}"
+                    f"渲染完成: page={page_img_res.page_index} size={page_img_res.width}x{page_img_res.height}"
                 )
-                yield page_img
+                yield page_img_res

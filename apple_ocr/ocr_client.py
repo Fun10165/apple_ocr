@@ -45,9 +45,13 @@ class SwiftOCRClient:
             languages if languages is not None else ["zh-Hans", "zh-Hant", "en-US"]
         )
         self.default_recognition_level: str = (
-            recognition_level if recognition_level in {"accurate", "fast"} else "accurate"
+            recognition_level
+            if recognition_level in {"accurate", "fast"}
+            else "accurate"
         )
-        self.default_uses_cpu_only: bool = uses_cpu_only if uses_cpu_only is not None else False
+        self.default_uses_cpu_only: bool = (
+            uses_cpu_only if uses_cpu_only is not None else False
+        )
         self.default_auto_detect_language: bool = (
             auto_detect_language if auto_detect_language is not None else True
         )
@@ -71,7 +75,7 @@ class SwiftOCRClient:
         """停止Swift OCR进程并清理资源"""
         if self.proc is None:
             return
-        
+
         # 发送结束信号
         try:
             if self.proc.stdin:
@@ -80,12 +84,12 @@ class SwiftOCRClient:
                 self.proc.stdin.close()
         except Exception as e:
             logger.debug(f"发送停止信号时出错: {e}")
-        
+
         # 等待读取线程结束（如果还在运行）
         if self._out_thread and self._out_thread.is_alive():
             # 等待一小段时间让线程处理最后的输出
             self._out_thread.join(timeout=1.0)
-        
+
         # 终止进程
         try:
             self.proc.terminate()
@@ -97,7 +101,7 @@ class SwiftOCRClient:
                 self.proc.wait()
         except Exception as e:
             logger.warning(f"终止进程时出错: {e}")
-        
+
         # 关闭stdout和stderr
         try:
             if self.proc.stdout:
@@ -106,19 +110,21 @@ class SwiftOCRClient:
                 self.proc.stderr.close()
         except Exception:
             pass
-        
+
         self.proc = None
         self._out_thread = None
         logger.info("Swift OCR 进程已结束")
 
-    def send_image(self, image_path: str, page_index: int, width: int, height: int, dpi: int):
+    def send_image(
+        self, image_path: str, page_index: int, width: int, height: int, dpi: int
+    ):
         if self.proc is None:
             raise RuntimeError("Swift OCR 进程未启动，请先调用 start()")
         if self.proc.stdin is None:
             raise RuntimeError("Swift OCR 进程 stdin 不可用")
         if self.proc.poll() is not None:
             raise RuntimeError(f"Swift OCR 进程已退出，退出码: {self.proc.poll()}")
-        
+
         payload = {
             "cmd": "ocr",
             "image_path": image_path,
@@ -143,8 +149,9 @@ class SwiftOCRClient:
         if self.proc is None or self.proc.stdout is None:
             logger.error("Swift OCR 进程或 stdout 不可用")
             return
-        
+
         try:
+
             def _iter_lines(stdout):
                 try:
                     for line in stdout:
@@ -169,7 +176,7 @@ class SwiftOCRClient:
                     logger.error(error_msg)
                     self._queue.put(RuntimeError(error_msg))
                     break
-                
+
                 try:
                     msg = json.loads(line)
                     if msg.get("type") == "result":
@@ -192,7 +199,9 @@ class SwiftOCRClient:
                         )
                         self._queue.put(res)
                     elif msg.get("type") == "error":
-                        self._queue.put(RuntimeError(msg.get("message", "Swift OCR error")))
+                        self._queue.put(
+                            RuntimeError(msg.get("message", "Swift OCR error"))
+                        )
                 except json.JSONDecodeError as e:
                     logger.warning(f"无法解析Swift OCR响应: {e}, 原始行: {line[:100]}")
                     self._queue.put(RuntimeError(f"JSON解析错误: {e}"))
@@ -210,14 +219,14 @@ class SwiftOCRClient:
     def collect_results(self, expected_pages: int, timeout: float = 300.0):
         """
         收集OCR结果
-        
+
         Args:
             expected_pages: 期望的页面数量
             timeout: 单个结果获取的超时时间（秒），默认300秒
-            
+
         Yields:
             OCRResult: OCR识别结果
-            
+
         Raises:
             RuntimeError: 如果进程退出或超时
             queue.Empty: 如果超时未收到结果
@@ -228,22 +237,24 @@ class SwiftOCRClient:
             if self.proc and self.proc.poll() is not None:
                 exit_code = self.proc.poll()
                 raise RuntimeError(f"Swift OCR 进程已退出，退出码: {exit_code}")
-            
+
             try:
                 item = self._queue.get(timeout=timeout)
             except queue.Empty:
                 raise RuntimeError(
                     f"等待OCR结果超时（{timeout}秒）。已收集 {collected}/{expected_pages} 个结果"
                 )
-            
+
             if isinstance(item, Exception):
                 logger.error(f"OCR错误: {item}")
                 raise item
             else:
                 collected += 1
-                logger.debug(f"收到OCR结果: page={item.page_index} items={len(item.items)}")
+                logger.debug(
+                    f"收到OCR结果: page={item.page_index} items={len(item.items)}"
+                )
                 yield item
-    
+
     def is_alive(self) -> bool:
         """检查Swift OCR进程是否还在运行"""
         return self.proc is not None and self.proc.poll() is None
